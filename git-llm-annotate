@@ -3,31 +3,25 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [<commit-hash>]"
+    echo "Usage: $0 [-l, --llm-name <llm-name>] [--review-level <level>] [<commit-hash>]"
     echo "  -l, --llm-name <llm-name>    LLM name (default: from git config llm.name or 'LLM')"
-    echo "  -M, --mode <mode-string>     Optional mode string"
+    echo "  --review-level <level>       Optional review level. Must be one of the levels defined in git config llm.allowedReviewLevels"
     echo "  <commit-hash>                Commit to annotate (default: HEAD)"
     exit 1
 }
 
 llm_name=""
-mode_string=""
+review_level=""
 commit_hash="HEAD"
-# TODO
-# rename_author="true" # make empty to skip rename
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --no-rename-author)
-            rename_author=""
-            shift 1
-            ;;
         -l|--llm-name)
             llm_name="$2"
             shift 2
             ;;
-        -M|--mode)
-            mode_string="$2"
+        --review-level)
+            review_level="$2"
             shift 2
             ;;
         -h|--help)
@@ -48,12 +42,27 @@ if [[ -z "$llm_name" ]]; then
     llm_name=$(git config --get llm.name 2>/dev/null || echo "LLM")
 fi
 
-# TODO
-# if [[ -z "$rename_author" ]]; then
-#     echo 123
-# fi
-# echo 321
-# exit
+if [[ -n "$review_level" ]]; then
+    allowed_levels=$(git config --get llm.allowedReviewLevels)
+    if [[ -z "$allowed_levels" ]]; then
+        echo "Error: --review-level is not allowed unless llm.allowedReviewLevels is set in git config." >&2
+        exit 1
+    fi
+
+    IFS=',' read -ra levels_array <<< "$allowed_levels"
+    level_found=false
+    for level in "${levels_array[@]}"; do
+        if [[ "$level" == "$review_level" ]]; then
+            level_found=true
+            break
+        fi
+    done
+
+    if [[ "$level_found" == "false" ]]; then
+        echo "Error: Invalid review level '$review_level'. Allowed levels are: $allowed_levels" >&2
+        exit 1
+    fi
+fi
 
 user_name=$(git config --get user.name)
 user_email=$(git config --get user.email)
@@ -65,9 +74,14 @@ fi
 
 new_author="${llm_name} (as ${user_name}) <${user_email}>"
 
+commit_message=$(git log -1 --pretty=%B "$commit_hash")
+# a trailer is a line that looks like "token: value" at the end of a commit message
+# remove existing trailers that we might have added
+commit_message=$(echo "$commit_message" | sed -e '/^AI-Generated:/d' -e '/^AI-Generated-Review-Level:/d')
+
 trailers=("AI-Generated: ${llm_name}")
-if [[ -n "$mode_string" ]]; then
-    trailers+=("AI-Generated-Mode: ${mode_string}")
+if [[ -n "$review_level" ]]; then
+    trailers+=("AI-Generated-Review-Level: ${review_level}")
 fi
 
 trailer_args=()
@@ -76,7 +90,7 @@ for trailer in "${trailers[@]}"; do
 done
 
 if [[ "$commit_hash" == "HEAD" ]]; then
-    git commit --amend --author="$new_author" "${trailer_args[@]}"
+    git commit --amend --author="$new_author" "${trailer_args[@]}" -m "$commit_message"
 else
     echo "Amending non-HEAD commits is not supported with --amend" >&2
     echo "Creating an empty commit." >&2
