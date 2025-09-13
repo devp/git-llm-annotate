@@ -6,7 +6,7 @@ usage() {
     echo "Usage: $0 [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [<commit-hash>]"
     echo "  -l, --llm-name <llm-name>    LLM name (default: from git config llm.name or 'LLM')"
     echo "  -M, --mode <mode-string>     Optional mode string"
-    echo "  <commit-hash>                Commit to annotate (default: HEAD)"
+    echo "  <commit-hash>                Commit to annotate (default: HEAD)."
     exit 1
 }
 
@@ -76,9 +76,82 @@ for trailer in "${trailers[@]}"; do
 done
 
 if [[ "$commit_hash" == "HEAD" ]]; then
-    git commit --amend --author="$new_author" "${trailer_args[@]}"
+    # When called from rebase --exec, we should not amend merge commits.
+    if [ $(git cat-file -p HEAD | grep -c ^parent) -gt 1 ]; then
+        echo "Skipping merge commit $(git rev-parse --short HEAD)"
+    else
+        git commit --amend --author="$new_author" "${trailer_args[@]}" --no-edit
+    fi
+elif [[ "$commit_hash" == *".."* ]]; then
+    stashed=false
+    if ! git diff-index --quiet HEAD --; then
+        git stash push -m "git-llm-annotate: stashing uncommitted changes" >/dev/null
+        stashed=true
+    fi
+
+    IFS='..' read -r start_rev end_rev <<< "$commit_hash"
+    if [[ -z "$start_rev" ]]; then
+        echo "Error: Invalid range, missing start of range." >&2
+        exit 1
+    fi
+    upstream=$(git rev-parse "$start_rev^")
+
+    exec_cmd="\"$0\""
+    # Pass along arguments
+    if [[ -n "$llm_name" ]]; then
+        # Note: this is tricky to get right with quoting.
+        # The value is used in a `sh -c` context by git rebase.
+        # Let's hope the llm_name doesn't contain single quotes.
+        exec_cmd="$exec_cmd --llm-name '$llm_name'"
+    fi
+    if [[ -n "$mode_string" ]]; then
+        exec_cmd="$exec_cmd --mode '$mode_string'"
+    fi
+
+    # By default, rebase will operate on HEAD.
+    # The commits that will be rebased are from upstream..HEAD
+    git rebase "$upstream" --exec "$exec_cmd"
+
+    if [ "$stashed" = true ]; then
+        git stash pop >/dev/null
+    fi
 else
-    echo "Amending non-HEAD commits is not supported with --amend" >&2
-    echo "Creating an empty commit." >&2
-    git commit --allow-empty --author="$new_author" "${trailer_args[@]}" -m "git-llm-annotate for $commit_hash"
+    original_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [[ -z "$original_branch" || "$original_branch" == "HEAD" ]]; then
+        echo "Error: Not on a branch. Cannot amend non-HEAD commit in detached HEAD state." >&2
+        exit 1
+    fi
+    original_head=$(git rev-parse HEAD)
+
+    commit_to_amend=$(git rev-parse "$commit_hash")
+
+    if ! git merge-base --is-ancestor "$commit_to_amend" "$original_head"; then
+        echo "Error: Commit $commit_hash ($commit_to_amend) is not an ancestor of your current HEAD." >&2
+        exit 1
+    fi
+
+    echo "Amending commit $commit_hash ($commit_to_amend)..."
+
+    # Detach HEAD at the commit to amend
+    git checkout "$commit_to_amend" --detach --quiet
+
+    # Amend the commit
+    git commit --amend --author="$new_author" "${trailer_args[@]}" --no-edit
+
+    amended_commit=$(git rev-parse HEAD)
+
+    # Rebase the commits that were on top of the original commit
+    echo "Rebasing commits that were on top of $commit_hash..."
+    # The upstream is the commit we amended. The new base is the amended commit.
+    # The branch to rebase is the original branch/HEAD.
+    git rebase --onto "$amended_commit" "$commit_to_amend" "$original_head" --quiet
+
+    # Update the original branch to point to the new HEAD of the rebased chain
+    new_head=$(git rev-parse HEAD)
+    git branch -f "$original_branch" "$new_head"
+
+    # Check back out to the branch
+    git checkout "$original_branch" --quiet
+
+    echo "Successfully amended commit $commit_hash and rebased descendants."
 fi
