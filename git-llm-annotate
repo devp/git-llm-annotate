@@ -76,13 +76,46 @@ for trailer in "${trailers[@]}"; do
 done
 
 if [[ "$commit_hash" == "HEAD" ]]; then
-    git commit --amend --author="$new_author" "${trailer_args[@]}"
-else
-    if [[ "$commit_hash" == *".."* ]]; then
-        echo "Amending a range of commits is not yet supported. Please provide a single commit hash." >&2
-        exit 1
+    # When called from rebase --exec, we should not amend merge commits.
+    if [ $(git cat-file -p HEAD | grep -c ^parent) -gt 1 ]; then
+        echo "Skipping merge commit $(git rev-parse --short HEAD)"
+    else
+        git commit --amend --author="$new_author" "${trailer_args[@]}" --no-edit
+    fi
+elif [[ "$commit_hash" == *".."* ]]; then
+    stashed=false
+    if ! git diff-index --quiet HEAD --; then
+        git stash push -m "git-llm-annotate: stashing uncommitted changes" >/dev/null
+        stashed=true
     fi
 
+    IFS='..' read -r start_rev end_rev <<< "$commit_hash"
+    if [[ -z "$start_rev" ]]; then
+        echo "Error: Invalid range, missing start of range." >&2
+        exit 1
+    fi
+    upstream=$(git rev-parse "$start_rev^")
+
+    exec_cmd="\"$0\""
+    # Pass along arguments
+    if [[ -n "$llm_name" ]]; then
+        # Note: this is tricky to get right with quoting.
+        # The value is used in a `sh -c` context by git rebase.
+        # Let's hope the llm_name doesn't contain single quotes.
+        exec_cmd="$exec_cmd --llm-name '$llm_name'"
+    fi
+    if [[ -n "$mode_string" ]]; then
+        exec_cmd="$exec_cmd --mode '$mode_string'"
+    fi
+
+    # By default, rebase will operate on HEAD.
+    # The commits that will be rebased are from upstream..HEAD
+    git rebase "$upstream" --exec "$exec_cmd"
+
+    if [ "$stashed" = true ]; then
+        git stash pop >/dev/null
+    fi
+else
     original_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
     if [[ -z "$original_branch" || "$original_branch" == "HEAD" ]]; then
         echo "Error: Not on a branch. Cannot amend non-HEAD commit in detached HEAD state." >&2
