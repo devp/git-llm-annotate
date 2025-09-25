@@ -1,26 +1,45 @@
-Utility to annotate git commits to hint at LLM usage, for the purpose of
+# git-llm-annotate
+
+Utility to annotate git commits to indicate LLM usage, for the purpose of:
 
 - better `git blame` usage
 - adding git-trailers that may be useful for code review
 
-Greatly inspired by: [http://gitai.run]. This is a much more modest version.
+Inspired by: [http://gitai.run]. This is a much more modest version that can be adopted as part of your own
+workflow without requiring larger change in your codebase or org. It is implemented as simple bash scripts
+that should be portable.
 
-## Prompt used for initial codegen
-
-TODO: onvert into docs
+## Usage
 
 ```
-Implement a script, `git-llm-annotate`, which amends a commit with context about LLM codegen.
+❯ git-llm-annotate --help
+Usage: git-llm-annotate [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [<commit-hash>]
+  -l, --llm-name <llm-name>    LLM name (default: from git config llm.name or 'LLM')
+  -M, --mode <mode-string>     Optional mode string
+  <commit-hash>                Commit to annotate (default: HEAD)
+```
 
-`git-llm-annotate [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [<commit-hash>]`
+Usually, once configured, you'll just call `git-llm-annotate` (with no arguments) after you've committed an
+LLM-driven change.
 
-- `<commit-hash>` if not provided, defaults to HEAD
-- `<llm-name>` if not provided, checks an appropriate value in git config for a default string, else defaults to "LLM"
-- `<mode-string>` optional
+## Explanation
 
-The script them executed a `git amend` command with this argument:
+**`llm-name`** indicates which model you are using, or just that you were using an LLM at all. It retains your ownership,
+but changes the author to `LLM Name <your.email@gmail.com>`. This changes which name is showed in `git blame`.
 
-1. Change the author to "{llm-name} (as {git config user.name}) <{git config user.email}>" (so that it appears in `git blame`).
-2. Add a git-trailer to the end: `AI-Generated: {llm-name}`
-3. If `mode-string` provided, add a git-trailer to the end: `AI-Generated-Mode: {mode-string}`
+It also saved as the git-trailer:
+
+```
+AI-Generated: LLM Name
+```
+
+You can define it at the command-line, or define it per-repo or globally in your git config.
+
+**`mode`** optionally indicates some other useful string about your LLM-driven workflow.
+For example: `unreviewed`, `reviewed`, `modified`.
+
+It is saved as the git-trailer:
+
+```
+AI-Generated-Mode: reviewed
 ```
