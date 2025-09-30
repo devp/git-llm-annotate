@@ -3,9 +3,10 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [<commit-hash>]"
+    echo "Usage: $0 [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [--commit] [<commit-hash>]"
     echo "  -l, --llm-name <llm-name>    LLM name (default: from git config llm.name or 'LLM')"
     echo "  -M, --mode <mode-string>     Optional mode string"
+    echo "  --commit                     Create new commit instead of amending"
     echo "  <commit-hash>                Commit to annotate (default: HEAD)"
     exit 1
 }
@@ -13,6 +14,7 @@ usage() {
 llm_name=""
 mode_string=""
 commit_hash="HEAD"
+use_commit="false"
 # TODO
 # rename_author="true" # make empty to skip rename
 
@@ -29,6 +31,10 @@ while [[ $# -gt 0 ]]; do
         -M|--mode)
             mode_string="$2"
             shift 2
+            ;;
+        --commit)
+            use_commit="true"
+            shift 1
             ;;
         -h|--help)
             usage
@@ -75,7 +81,10 @@ for trailer in "${trailers[@]}"; do
     trailer_args+=("--trailer" "$trailer")
 done
 
-if [[ "$commit_hash" == "HEAD" ]]; then
+if [[ "$use_commit" == "true" ]]; then
+    # Create a new commit with staged changes
+    git commit --author="$new_author" "${trailer_args[@]}"
+elif [[ "$commit_hash" == "HEAD" ]]; then
     git commit --amend --author="$new_author" "${trailer_args[@]}"
 else
     echo "Amending non-HEAD commits is not supported with --amend" >&2

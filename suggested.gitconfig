@@ -1,4 +1,5 @@
 [alias]
   llma = ! git-llm-annotate "$@"
+  llmc = ! git-llm-annotate --commit "$@"
 [llm]
   name = "ModelDetails"

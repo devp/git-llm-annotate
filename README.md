@@ -13,9 +13,10 @@ that should be portable.
 
 ```
 ❯ git-llm-annotate --help
-Usage: git-llm-annotate [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [<commit-hash>]
+Usage: git-llm-annotate [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [--commit] [<commit-hash>]
   -l, --llm-name <llm-name>    LLM name (default: from git config llm.name or 'LLM')
   -M, --mode <mode-string>     Optional mode string
+  --commit                     Create new commit instead of amending
   <commit-hash>                Commit to annotate (default: HEAD)
 ```
 
