@@ -1,0 +1,30 @@
+{
+  "items": [
+    {
+      "title": "Exploring the Alps",
+      "description": "A breathtaking journey through the Swiss Alps, showcasing stunning landscapes and serene lakes.",
+      "imageUrl": "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80",
+      "link": "https://unsplash.com"
+    },
+    {
+      "title": "City Nights",
+      "description": "The vibrant energy of a city that never sleeps, captured in a stunning timelapse.",
+      "videoUrl": "https://www.youtube.com/watch?v=syXq22g1J7Q",
+      "thumbnailUrl": "https://images.unsplash.com/photo-1531218150217-54595bc2b934?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80",
+      "link": "https://www.youtube.com/watch?v=syXq22g1J7Q"
+    },
+    {
+      "title": "The Art of Minimalism",
+      "description": "Discover how less can be more in this exploration of minimalist design and lifestyle.",
+      "imageUrl": "https://images.unsplash.com/photo-1519642918688-7e43b19245d8?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80",
+      "link": "https://unsplash.com"
+    },
+    {
+        "title": "Deep Ocean",
+        "description": "A dive into the mysterious and beautiful world of the deep ocean.",
+        "videoUrl": "https://www.youtube.com/watch?v=6Zbhvaac68Y",
+        "thumbnailUrl": "https://images.unsplash.com/photo-1562059392-096320bccc7e?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80",
+        "link": "https://www.youtube.com/watch?v=6Zbhvaac68Y"
+    }
+  ]
+}
