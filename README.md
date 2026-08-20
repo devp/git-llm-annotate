@@ -13,34 +13,42 @@ that should be portable.
 
 ```
 ❯ git-llm-annotate --help
-Usage: git-llm-annotate [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [--commit] [<commit-hash>]
-  -l, --llm-name <llm-name>    LLM name (default: from git config llm.name or 'LLM')
-  -M, --mode <mode-string>     Optional mode string
-  --commit                     Create new commit instead of amending
-  <commit-hash>                Commit to annotate (default: HEAD)
+Usage: git-llm-annotate [-n, --trailer-name <name>] [-t, --traits <trait,trait,...>] [--allowed-traits <trait,trait,...>] [--commit] [<commit-hash>]
+  -n, --trailer-name <name>       Trailer name (default: from git config llm-annotate.trailer-name or 'LLM-Annotate')
+  -t, --traits <trait,trait,...>  Comma-separated traits; skips interactive picker
+      --allowed-traits <list>     Comma-separated allowed traits (default: from git config llm-annotate.allowed-traits or built-in list)
+  --commit                        Create new commit instead of amending
+  <commit-hash>                   Commit to annotate (default: HEAD)
 ```
 
 Usually, once configured, you'll just call `git-llm-annotate` (with no arguments) after you've committed an
-LLM-driven change.
+LLM-driven change, then pick traits interactively.
 
 ## Explanation
 
-**`llm-name`** indicates which model you are using, or just that you were using an LLM at all. It retains your ownership,
-but changes the author to `LLM Name <your.email@gmail.com>`. This changes which name is showed in `git blame`.
-
-It also saved as the git-trailer:
+Each commit gets a single git-trailer whose body is a comma-separated list of traits describing how the LLM
+was involved:
 
 ```
-AI-Generated: LLM Name
+LLM-Annotate: LLM-Guided, Human-Author-Reviewed
 ```
 
-You can define it at the command-line, or define it per-repo or globally in your git config.
+**Traits** must come from an allowed list, so trailers stay consistent and greppable across a repo. The
+built-in default list is:
 
-**`mode`** optionally indicates some other useful string about your LLM-driven workflow.
-For example: `unreviewed`, `reviewed`, `modified`.
+- `LLM-Generated`
+- `LLM-Guided`
+- `LLM-Reviewed`
+- `Human-Author-Skimmed`
+- `Human-Author-Reviewed`
+- `Human-Reviewer-Approved`
 
-It is saved as the git-trailer:
+Override it per-repo or globally with `git config llm-annotate.allowed-traits "Trait-A,Trait-B,..."`, or
+for a single invocation with `--allowed-traits`.
 
-```
-AI-Generated-Mode: reviewed
-```
+**Trailer name** defaults to `LLM-Annotate`. Override it with `git config llm-annotate.trailer-name <name>`
+or `-n/--trailer-name`.
+
+**Picking traits**: if you don't pass `-t/--traits`, git-llm-annotate opens an interactive picker. It uses
+[`zf`](https://github.com/natecraddock/zf) or [`fzf`](https://github.com/junegunn/fzf) (multi-select) if
+either is installed, falling back to a plain prompt-in-a-loop otherwise.

@@ -1,5 +1,6 @@
 [alias]
   llma = ! git-llm-annotate "$@"
   llmc = ! git-llm-annotate --commit "$@"
-[llm]
-  name = "ModelDetails"
+[llm-annotate]
+  trailer-name = "LLM-Annotate"
+  ; allowed-traits = "LLM-Generated,LLM-Guided,LLM-Reviewed,Human-Author-Skimmed,Human-Author-Reviewed,Human-Reviewer-Approved"

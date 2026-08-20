@@ -2,34 +2,37 @@
 
 set -euo pipefail
 
+DEFAULT_TRAILER_NAME="LLM-Annotate"
+DEFAULT_ALLOWED_TRAITS="LLM-Generated,LLM-Guided,LLM-Reviewed,Human-Author-Skimmed,Human-Author-Reviewed,Human-Reviewer-Approved"
+
 usage() {
-    echo "Usage: $0 [-l, --llm-name <llm-name>] [-M, --mode <mode-string>] [--commit] [<commit-hash>]"
-    echo "  -l, --llm-name <llm-name>    LLM name (default: from git config llm.name or 'LLM')"
-    echo "  -M, --mode <mode-string>     Optional mode string"
-    echo "  --commit                     Create new commit instead of amending"
-    echo "  <commit-hash>                Commit to annotate (default: HEAD)"
+    echo "Usage: $0 [-n, --trailer-name <name>] [-t, --traits <trait,trait,...>] [--allowed-traits <trait,trait,...>] [--commit] [<commit-hash>]"
+    echo "  -n, --trailer-name <name>       Trailer name (default: from git config llm-annotate.trailer-name or '${DEFAULT_TRAILER_NAME}')"
+    echo "  -t, --traits <trait,trait,...>  Comma-separated traits; skips interactive picker"
+    echo "      --allowed-traits <list>     Comma-separated allowed traits (default: from git config llm-annotate.allowed-traits or built-in list)"
+    echo "  --commit                        Create new commit instead of amending"
+    echo "  <commit-hash>                   Commit to annotate (default: HEAD)"
     exit 1
 }
 
-llm_name=""
-mode_string=""
+trailer_name=""
+traits_arg=""
+allowed_traits_arg=""
 commit_hash="HEAD"
 use_commit="false"
-# TODO
-# rename_author="true" # make empty to skip rename
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --no-rename-author)
-            rename_author=""
-            shift 1
-            ;;
-        -l|--llm-name)
-            llm_name="$2"
+        -n|--trailer-name)
+            trailer_name="$2"
             shift 2
             ;;
-        -M|--mode)
-            mode_string="$2"
+        -t|--traits)
+            traits_arg="$2"
+            shift 2
+            ;;
+        --allowed-traits)
+            allowed_traits_arg="$2"
             shift 2
             ;;
         --commit)
@@ -50,44 +53,80 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$llm_name" ]]; then
-    llm_name=$(git config --get llm.name 2>/dev/null || echo "LLM")
+if [[ -z "$trailer_name" ]]; then
+    trailer_name=$(git config --get llm-annotate.trailer-name 2>/dev/null || echo "$DEFAULT_TRAILER_NAME")
 fi
 
-# TODO
-# if [[ -z "$rename_author" ]]; then
-#     echo 123
-# fi
-# echo 321
-# exit
+if [[ -z "$allowed_traits_arg" ]]; then
+    allowed_traits_arg=$(git config --get llm-annotate.allowed-traits 2>/dev/null || echo "$DEFAULT_ALLOWED_TRAITS")
+fi
 
-user_name=$(git config --get user.name)
-user_email=$(git config --get user.email)
+IFS=',' read -ra allowed_traits <<< "$allowed_traits_arg"
+for i in "${!allowed_traits[@]}"; do
+    allowed_traits[$i]=$(echo "${allowed_traits[$i]}" | xargs)
+done
 
-if [[ -z "$user_name" || -z "$user_email" ]]; then
-    echo "Error: Git user.name and user.email must be configured" >&2
+is_allowed_trait() {
+    local candidate="$1"
+    local allowed
+    for allowed in "${allowed_traits[@]}"; do
+        [[ "$candidate" == "$allowed" ]] && return 0
+    done
+    return 1
+}
+
+selected_traits=()
+
+if [[ -n "$traits_arg" ]]; then
+    IFS=',' read -ra input_traits <<< "$traits_arg"
+    for t in "${input_traits[@]}"; do
+        t=$(echo "$t" | xargs)
+        [[ -z "$t" ]] && continue
+        if ! is_allowed_trait "$t"; then
+            echo "Error: '$t' is not an allowed trait" >&2
+            echo "Allowed traits: ${allowed_traits[*]}" >&2
+            exit 1
+        fi
+        selected_traits+=("$t")
+    done
+elif command -v zf >/dev/null 2>&1; then
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && selected_traits+=("$line")
+    done < <(printf '%s\n' "${allowed_traits[@]}" | zf)
+elif command -v fzf >/dev/null 2>&1; then
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && selected_traits+=("$line")
+    done < <(printf '%s\n' "${allowed_traits[@]}" | fzf -m)
+else
+    echo "Select traits (one at a time). Empty line to finish." >&2
+    echo "Allowed traits: ${allowed_traits[*]}" >&2
+    while true; do
+        read -r -p "Trait: " entry
+        [[ -z "$entry" ]] && break
+        entry=$(echo "$entry" | xargs)
+        if ! is_allowed_trait "$entry"; then
+            echo "'$entry' is not an allowed trait" >&2
+            continue
+        fi
+        selected_traits+=("$entry")
+    done
+fi
+
+if [[ ${#selected_traits[@]} -eq 0 ]]; then
+    echo "Error: no traits selected" >&2
     exit 1
 fi
 
-new_author="${llm_name} (as ${user_name}) <${user_email}>"
-
-trailers=("AI-Generated: ${llm_name}")
-if [[ -n "$mode_string" ]]; then
-    trailers+=("AI-Generated-Mode: ${mode_string}")
-fi
-
-trailer_args=()
-for trailer in "${trailers[@]}"; do
-    trailer_args+=("--trailer" "$trailer")
-done
+traits_body=$(printf ', %s' "${selected_traits[@]}")
+traits_body="${traits_body:2}"
+trailer="${trailer_name}: ${traits_body}"
 
 if [[ "$use_commit" == "true" ]]; then
-    # Create a new commit with staged changes
-    git commit --author="$new_author" "${trailer_args[@]}"
+    git commit --trailer "$trailer"
 elif [[ "$commit_hash" == "HEAD" ]]; then
-    git commit --amend --author="$new_author" "${trailer_args[@]}"
+    git commit --amend --trailer "$trailer"
 else
     echo "Amending non-HEAD commits is not supported with --amend" >&2
     echo "Creating an empty commit." >&2
-    git commit --allow-empty --author="$new_author" "${trailer_args[@]}" -m "git-llm-annotate for $commit_hash"
+    git commit --allow-empty --trailer "$trailer" -m "git-llm-annotate for $commit_hash"
 fi
