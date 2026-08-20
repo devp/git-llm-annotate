@@ -3,6 +3,11 @@
 
 set -uo pipefail
 
+# Isolate from the real user's global/system git config (e.g. a
+# previously-set llm-annotate.trailer-name) so tests are deterministic.
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 SCRIPT="$SCRIPT_DIR/../git-llm-annotate"
 
@@ -66,6 +71,17 @@ test_default_trailer_amend() {
     new_repo
     "$SCRIPT" -t "LLM-Guided, Human-Author-Reviewed" >/dev/null
     assert_contains "default trailer name, amend" "$(last_commit_body)" "LLM-Annotate: LLM-Guided, Human-Author-Reviewed"
+}
+
+test_reannotate_replaces_not_duplicates() {
+    new_repo
+    "$SCRIPT" -t "LLM-Generated" >/dev/null
+    out=$("$SCRIPT" -t "LLM-Reviewed" 2>&1)
+    body="$(last_commit_body)"
+    assert_contains "warns which line is being replaced" "$out" "Replacing existing trailer: LLM-Annotate: LLM-Generated"
+    assert_contains "new trailer value present" "$body" "LLM-Annotate: LLM-Reviewed"
+    trailer_count=$(grep -c "^LLM-Annotate:" <<< "$body")
+    assert_eq "only one trailer line, not duplicated" "1" "$trailer_count"
 }
 
 test_invalid_trait_rejected() {
@@ -136,6 +152,7 @@ test_help_exits_nonzero() {
 }
 
 test_default_trailer_amend
+test_reannotate_replaces_not_duplicates
 test_invalid_trait_rejected
 test_custom_trailer_name_and_allowed_traits
 test_trait_outside_custom_allowed_list_rejected

@@ -124,7 +124,14 @@ trailer="${trailer_name}: ${traits_body}"
 if [[ "$use_commit" == "true" ]]; then
     git commit --trailer "$trailer"
 elif [[ "$commit_hash" == "HEAD" ]]; then
-    git commit --amend --trailer "$trailer"
+    existing_line=""
+    while IFS= read -r line; do
+        [[ "$line" == "${trailer_name}: "* ]] && existing_line="$line"
+    done < <(git log -1 --format=%B)
+    if [[ -n "$existing_line" ]]; then
+        echo "Replacing existing trailer: $existing_line" >&2
+    fi
+    git -c "trailer.${trailer_name}.ifExists=replace" commit --amend --trailer "$trailer"
 else
     echo "Amending non-HEAD commits is not supported with --amend" >&2
     echo "Creating an empty commit." >&2
