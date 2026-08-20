@@ -44,6 +44,21 @@ Trailer name defaults to `LLM-Annotate`; override via `git config llm-annotate.t
   rebased onto the amended commit (trees untouched, hashes change). Commit count printed before rewriting.
   - **Warning: rebase at your own risk!!**
 
+## Lazygit integration
+
+Add to `~/.config/lazygit/config.yml` to trigger on selected commit (key `a`):
+
+```yaml
+customCommands:
+  - key: 'a'
+    context: 'commits'
+    command: 'git-llm-annotate {{.SelectedCommit.Hash}}'
+    subprocess: true
+    loadingText: 'Annotating...'
+```
+
+`subprocess: true` needed so the interactive trait picker gets a terminal.
+
 ## Credits
 
 - Inspired by to [http://gitai.run], thank you!
