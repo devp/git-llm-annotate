@@ -18,7 +18,7 @@ Usage: git-llm-annotate [-n, --trailer-name <name>] [-t, --traits <trait,trait,.
   -t, --traits <trait,trait,...>  Comma-separated traits; skips interactive picker
       --allowed-traits <list>     Comma-separated allowed traits (default: from git config llm-annotate.allowed-traits or built-in list)
   --commit                        Create new commit instead of amending
-  <commit-hash>                   Commit to annotate (default: HEAD)
+  <commit-hash>                   Commit to amend (default: HEAD); rebases descendants if not HEAD
 ```
 
 Usually, once configured, you'll just call `git-llm-annotate` (with no arguments) after you've committed an
@@ -52,3 +52,8 @@ or `-n/--trailer-name`.
 **Picking traits**: if you don't pass `-t/--traits`, git-llm-annotate opens an interactive picker. It uses
 [`zf`](https://github.com/natecraddock/zf) or [`fzf`](https://github.com/junegunn/fzf) (multi-select) if
 either is installed, falling back to a plain prompt-in-a-loop otherwise.
+
+**Amending a specific commit**: passing `<commit-hash>` amends that commit's trailer in place (not just
+HEAD). It must be an ancestor of HEAD and your working tree must be clean. If the commit has descendants,
+they get rebased on top of the amended commit — their trees are untouched, so the rebase always applies
+cleanly, but their hashes change. git-llm-annotate prints how many commits it's rewriting before it starts.

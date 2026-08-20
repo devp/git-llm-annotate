@@ -11,7 +11,7 @@ usage() {
     echo "  -t, --traits <trait,trait,...>  Comma-separated traits; skips interactive picker"
     echo "      --allowed-traits <list>     Comma-separated allowed traits (default: from git config llm-annotate.allowed-traits or built-in list)"
     echo "  --commit                        Create new commit instead of amending"
-    echo "  <commit-hash>                   Commit to annotate (default: HEAD)"
+    echo "  <commit-hash>                   Commit to amend (default: HEAD); rebases descendants if not HEAD"
     exit 1
 }
 
@@ -121,19 +121,55 @@ traits_body=$(printf ', %s' "${selected_traits[@]}")
 traits_body="${traits_body:2}"
 trailer="${trailer_name}: ${traits_body}"
 
-if [[ "$use_commit" == "true" ]]; then
-    git commit --trailer "$trailer"
-elif [[ "$commit_hash" == "HEAD" ]]; then
-    existing_line=""
+warn_if_replacing() {
+    local target="$1"
+    local existing_line=""
+    local line
     while IFS= read -r line; do
         [[ "$line" == "${trailer_name}: "* ]] && existing_line="$line"
-    done < <(git log -1 --format=%B)
+    done < <(git show -s --format=%B "$target")
     if [[ -n "$existing_line" ]]; then
         echo "Replacing existing trailer: $existing_line" >&2
     fi
+}
+
+if [[ "$use_commit" == "true" ]]; then
+    git commit --trailer "$trailer"
+elif [[ "$commit_hash" == "HEAD" ]]; then
+    warn_if_replacing HEAD
     git -c "trailer.${trailer_name}.ifExists=replace" commit --amend --trailer "$trailer"
 else
-    echo "Amending non-HEAD commits is not supported with --amend" >&2
-    echo "Creating an empty commit." >&2
-    git commit --allow-empty --trailer "$trailer" -m "git-llm-annotate for $commit_hash"
+    target=$(git rev-parse --verify "${commit_hash}^{commit}")
+    if ! git merge-base --is-ancestor "$target" HEAD; then
+        echo "Error: $commit_hash is not an ancestor of HEAD" >&2
+        exit 1
+    fi
+    if [[ -n "$(git status --porcelain)" ]]; then
+        echo "Error: working tree not clean; commit or stash changes before amending a non-HEAD commit" >&2
+        exit 1
+    fi
+
+    warn_if_replacing "$target"
+
+    old_message=$(git show -s --format=%B "$target")
+    new_message=$(git -c "trailer.${trailer_name}.ifExists=replace" interpret-trailers --trailer "$trailer" <<< "$old_message")
+
+    tree=$(git rev-parse "${target}^{tree}")
+    parent_args=()
+    if parent=$(git rev-parse --verify "${target}^" 2>/dev/null); then
+        parent_args=(-p "$parent")
+    fi
+
+    new_target=$(
+        GIT_AUTHOR_NAME=$(git show -s --format=%an "$target") \
+        GIT_AUTHOR_EMAIL=$(git show -s --format=%ae "$target") \
+        GIT_AUTHOR_DATE=$(git show -s --format=%aI "$target") \
+        git commit-tree "$tree" "${parent_args[@]+"${parent_args[@]}"}" -m "$new_message"
+    )
+
+    descendant_count=$(git rev-list --count "${target}..HEAD")
+    if [[ "$descendant_count" -gt 0 ]]; then
+        echo "Rewriting $commit_hash and rebasing $descendant_count descendant commit(s) onto it." >&2
+    fi
+    git rebase --onto "$new_target" "$target"
 fi

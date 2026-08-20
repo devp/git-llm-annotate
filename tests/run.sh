@@ -133,14 +133,69 @@ test_no_traits_selected_errors() {
     assert_contains "empty traits error message" "$out" "no traits selected"
 }
 
-test_non_head_commit_creates_empty_commit() {
+test_non_head_commit_amends_and_rebases_descendants() {
+    new_repo
+    target=$(git rev-parse HEAD)
+    stage_change
+    git commit -qm "second"
+    stage_change
+    git commit -qm "third"
+    out=$("$SCRIPT" -t "LLM-Generated" "$target" 2>&1)
+    assert_contains "warns how many descendants get rebased" "$out" "rebasing 2 descendant commit(s)"
+    log=$(git log --reverse --format="%s: %B---")
+    assert_contains "target commit carries the trailer" "$log" "init: init
+
+LLM-Annotate: LLM-Generated
+---"
+    assert_contains "descendant commits keep their own message, unmodified" "$log" "second: second
+---"
+    assert_contains "history still has exactly 3 commits" "$(git rev-list --count HEAD)" "3"
+    assert_contains "tip content preserved after rebase" "$(cat f.txt)" "content
+more
+more"
+}
+
+test_non_head_reannotate_replaces_not_duplicates() {
     new_repo
     target=$(git rev-parse HEAD)
     stage_change
     git commit -qm "second"
     "$SCRIPT" -t "LLM-Generated" "$target" >/dev/null 2>&1
-    assert_contains "non-HEAD commit creates empty annotate commit" "$(last_commit_body)" "git-llm-annotate for $target"
-    assert_contains "non-HEAD commit still carries trailer" "$(last_commit_body)" "LLM-Annotate: LLM-Generated"
+    new_target=$(git rev-list --max-parents=0 HEAD)
+    out=$("$SCRIPT" -t "LLM-Reviewed" "$new_target" 2>&1)
+    assert_contains "warns which line is being replaced on non-HEAD amend" "$out" "Replacing existing trailer: LLM-Annotate: LLM-Generated"
+    root_body=$(git show -s --format=%B "$(git rev-list --max-parents=0 HEAD)")
+    assert_contains "non-HEAD replace lands new value" "$root_body" "LLM-Annotate: LLM-Reviewed"
+    trailer_count=$(grep -c "^LLM-Annotate:" <<< "$root_body")
+    assert_eq "non-HEAD replace does not duplicate the trailer line" "1" "$trailer_count"
+}
+
+test_non_ancestor_commit_rejected() {
+    new_repo
+    stage_change
+    git commit -qm "second"
+    git checkout -qb other HEAD~1
+    echo x > g.txt
+    git add g.txt
+    git commit -qm "other-branch commit"
+    other=$(git rev-parse HEAD)
+    git checkout -q main
+    out=$("$SCRIPT" -t "LLM-Generated" "$other" 2>&1)
+    code=$?
+    assert_eq "non-ancestor commit exits 1" "1" "$code"
+    assert_contains "non-ancestor error message" "$out" "is not an ancestor of HEAD"
+}
+
+test_dirty_tree_rejected_for_non_head_amend() {
+    new_repo
+    target=$(git rev-parse HEAD)
+    stage_change
+    git commit -qm "second"
+    echo dirty >> f.txt
+    out=$("$SCRIPT" -t "LLM-Generated" "$target" 2>&1)
+    code=$?
+    assert_eq "dirty tree exits 1" "1" "$code"
+    assert_contains "dirty tree error message" "$out" "working tree not clean"
 }
 
 test_help_exits_nonzero() {
@@ -159,7 +214,10 @@ test_trait_outside_custom_allowed_list_rejected
 test_git_config_defaults
 test_fallback_loop_no_picker
 test_no_traits_selected_errors
-test_non_head_commit_creates_empty_commit
+test_non_head_commit_amends_and_rebases_descendants
+test_non_head_reannotate_replaces_not_duplicates
+test_non_ancestor_commit_rejected
+test_dirty_tree_rejected_for_non_head_amend
 test_help_exits_nonzero
 
 cleanup
