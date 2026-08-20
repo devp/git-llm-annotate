@@ -6,9 +6,9 @@ DEFAULT_TRAILER_NAME="LLM-Annotate"
 DEFAULT_ALLOWED_TRAITS="LLM-Generated,LLM-Guided,LLM-Reviewed,Human-Author-Skimmed,Human-Author-Reviewed,Human-Reviewer-Approved"
 
 usage() {
-    echo "Usage: $0 [-n, --trailer-name <name>] [-t, --traits <trait,trait,...>] [--allowed-traits <trait,trait,...>] [--commit] [<commit-hash>]"
+    echo "Usage: $0 [-n, --trailer-name <name>] [-t, --traits <trait,trait,...>|REMOVE] [--allowed-traits <trait,trait,...>] [--commit] [<commit-hash>]"
     echo "  -n, --trailer-name <name>       Trailer name (default: from git config llm-annotate.trailer-name or '${DEFAULT_TRAILER_NAME}')"
-    echo "  -t, --traits <trait,trait,...>  Comma-separated traits; skips interactive picker"
+    echo "  -t, --traits <trait,trait,...>  Comma-separated traits; skips interactive picker. 'REMOVE' deletes the existing trailer"
     echo "      --allowed-traits <list>     Comma-separated allowed traits (default: from git config llm-annotate.allowed-traits or built-in list)"
     echo "  --commit                        Create new commit instead of amending"
     echo "  <commit-hash>                   Commit to amend (default: HEAD); rebases descendants if not HEAD"
@@ -75,87 +75,51 @@ is_allowed_trait() {
     return 1
 }
 
-selected_traits=()
-
-if [[ -n "$traits_arg" ]]; then
-    IFS=',' read -ra input_traits <<< "$traits_arg"
-    for t in "${input_traits[@]}"; do
-        t=$(echo "$t" | xargs)
-        [[ -z "$t" ]] && continue
-        if ! is_allowed_trait "$t"; then
-            echo "Error: '$t' is not an allowed trait" >&2
-            echo "Allowed traits: ${allowed_traits[*]}" >&2
-            exit 1
-        fi
-        selected_traits+=("$t")
-    done
-elif command -v zf >/dev/null 2>&1; then
+strip_trailer_lines() {
+    local message="$1"
+    local line out=""
     while IFS= read -r line; do
-        [[ -n "$line" ]] && selected_traits+=("$line")
-    done < <(printf '%s\n' "${allowed_traits[@]}" | zf)
-elif command -v fzf >/dev/null 2>&1; then
-    while IFS= read -r line; do
-        [[ -n "$line" ]] && selected_traits+=("$line")
-    done < <(printf '%s\n' "${allowed_traits[@]}" | fzf -m)
-else
-    echo "Select traits (one at a time). Empty line to finish." >&2
-    echo "Allowed traits: ${allowed_traits[*]}" >&2
-    while true; do
-        read -r -p "Trait: " entry
-        [[ -z "$entry" ]] && break
-        entry=$(echo "$entry" | xargs)
-        if ! is_allowed_trait "$entry"; then
-            echo "'$entry' is not an allowed trait" >&2
-            continue
-        fi
-        selected_traits+=("$entry")
-    done
-fi
-
-if [[ ${#selected_traits[@]} -eq 0 ]]; then
-    echo "Error: no traits selected" >&2
-    exit 1
-fi
-
-traits_body=$(printf ', %s' "${selected_traits[@]}")
-traits_body="${traits_body:2}"
-trailer="${trailer_name}: ${traits_body}"
+        [[ "$line" == "${trailer_name}: "* ]] && continue
+        out+="$line"$'\n'
+    done <<< "$message"
+    printf '%s' "${out%$'\n'}"
+}
 
 warn_if_replacing() {
     local target="$1"
-    local existing_line=""
+    local existing=""
     local line
     while IFS= read -r line; do
-        [[ "$line" == "${trailer_name}: "* ]] && existing_line="$line"
+        [[ "$line" == "${trailer_name}: "* ]] && existing="$line"
     done < <(git show -s --format=%B "$target")
-    if [[ -n "$existing_line" ]]; then
-        echo "Replacing existing trailer: $existing_line" >&2
+    if [[ -n "$existing" ]]; then
+        echo "Replacing existing trailer: $existing" >&2
     fi
 }
 
-if [[ "$use_commit" == "true" ]]; then
-    git commit --trailer "$trailer"
-elif [[ "$commit_hash" == "HEAD" ]]; then
-    warn_if_replacing HEAD
-    git -c "trailer.${trailer_name}.ifExists=replace" commit --amend --trailer "$trailer"
-else
-    target=$(git rev-parse --verify "${commit_hash}^{commit}")
-    if ! git merge-base --is-ancestor "$target" HEAD; then
-        echo "Error: $commit_hash is not an ancestor of HEAD" >&2
+resolve_target() {
+    local hash="$1"
+    local t
+    t=$(git rev-parse --verify "${hash}^{commit}")
+    if ! git merge-base --is-ancestor "$t" HEAD; then
+        echo "Error: $hash is not an ancestor of HEAD" >&2
         exit 1
     fi
     if [[ -n "$(git status --porcelain)" ]]; then
         echo "Error: working tree not clean; commit or stash changes before amending a non-HEAD commit" >&2
         exit 1
     fi
+    printf '%s' "$t"
+}
 
-    warn_if_replacing "$target"
-
-    old_message=$(git show -s --format=%B "$target")
-    new_message=$(git -c "trailer.${trailer_name}.ifExists=replace" interpret-trailers --trailer "$trailer" <<< "$old_message")
+# Rewrites $target's message to $new_message and rebases HEAD's descendants
+# onto the rewritten commit. Relies on the global $commit_hash for logging.
+rewrite_commit_message() {
+    local target="$1"
+    local new_message="$2"
+    local tree parent parent_args=() new_target descendant_count
 
     tree=$(git rev-parse "${target}^{tree}")
-    parent_args=()
     if parent=$(git rev-parse --verify "${target}^" 2>/dev/null); then
         parent_args=(-p "$parent")
     fi
@@ -172,4 +136,118 @@ else
         echo "Rewriting $commit_hash and rebasing $descendant_count descendant commit(s) onto it." >&2
     fi
     git rebase --onto "$new_target" "$target"
+}
+
+# Removal only applies to an existing commit's own trailer, never to a fresh
+# --commit. Detection here is side-effect free (no ancestor/clean-tree
+# checks) so it's safe to run before we know whether removal was requested.
+existing_line=""
+existing_body=""
+if [[ "$use_commit" == "false" ]] && target_commit=$(git rev-parse --verify "${commit_hash}^{commit}" 2>/dev/null); then
+    while IFS= read -r line; do
+        [[ "$line" == "${trailer_name}: "* ]] && existing_line="$line"
+    done < <(git show -s --format=%B "$target_commit")
+    if [[ -n "$existing_line" ]]; then
+        existing_body="${existing_line#"${trailer_name}": }"
+    fi
+fi
+
+remove_sentinel="(remove annotation)"
+[[ -n "$existing_body" ]] && remove_sentinel="(remove annotation: ${existing_body})"
+
+selected_traits=()
+remove_requested="false"
+
+if [[ -n "$traits_arg" ]]; then
+    if [[ "$traits_arg" == "REMOVE" ]]; then
+        if [[ -z "$existing_body" ]]; then
+            echo "Error: no existing '${trailer_name}' trailer to remove" >&2
+            exit 1
+        fi
+        remove_requested="true"
+    else
+        IFS=',' read -ra input_traits <<< "$traits_arg"
+        for t in "${input_traits[@]}"; do
+            t=$(echo "$t" | xargs)
+            [[ -z "$t" ]] && continue
+            if ! is_allowed_trait "$t"; then
+                echo "Error: '$t' is not an allowed trait" >&2
+                echo "Allowed traits: ${allowed_traits[*]}" >&2
+                exit 1
+            fi
+            selected_traits+=("$t")
+        done
+    fi
+elif command -v zf >/dev/null 2>&1; then
+    picker_traits=("${allowed_traits[@]}")
+    [[ -n "$existing_body" ]] && picker_traits=("$remove_sentinel" "${picker_traits[@]}")
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && selected_traits+=("$line")
+    done < <(printf '%s\n' "${picker_traits[@]}" | zf)
+elif command -v fzf >/dev/null 2>&1; then
+    picker_traits=("${allowed_traits[@]}")
+    [[ -n "$existing_body" ]] && picker_traits=("$remove_sentinel" "${picker_traits[@]}")
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && selected_traits+=("$line")
+    done < <(printf '%s\n' "${picker_traits[@]}" | fzf -m)
+else
+    echo "Select traits (one at a time). Empty line to finish." >&2
+    echo "Allowed traits: ${allowed_traits[*]}" >&2
+    if [[ -n "$existing_body" ]]; then
+        echo "Or enter '${remove_sentinel}' to remove the current trailer" >&2
+    fi
+    while true; do
+        read -r -p "Trait: " entry
+        [[ -z "$entry" ]] && break
+        entry=$(echo "$entry" | xargs)
+        if [[ -n "$existing_body" && "$entry" == "$remove_sentinel" ]]; then
+            selected_traits+=("$remove_sentinel")
+            break
+        fi
+        if ! is_allowed_trait "$entry"; then
+            echo "'$entry' is not an allowed trait" >&2
+            continue
+        fi
+        selected_traits+=("$entry")
+    done
+fi
+
+if [[ "$remove_requested" == "false" && ${#selected_traits[@]} -eq 1 && "${selected_traits[0]}" == "$remove_sentinel" ]]; then
+    remove_requested="true"
+    selected_traits=()
+fi
+
+if [[ "$remove_requested" == "true" ]]; then
+    if [[ "$commit_hash" == "HEAD" ]]; then
+        new_message=$(strip_trailer_lines "$(git log -1 --format=%B)")
+        git commit --amend -m "$new_message"
+    else
+        target=$(resolve_target "$commit_hash")
+        new_message=$(strip_trailer_lines "$(git show -s --format=%B "$target")")
+        rewrite_commit_message "$target" "$new_message"
+    fi
+    echo "Removed trailer: $existing_line" >&2
+    exit 0
+fi
+
+if [[ ${#selected_traits[@]} -eq 0 ]]; then
+    echo "Error: no traits selected" >&2
+    exit 1
+fi
+
+traits_body=$(printf ', %s' "${selected_traits[@]}")
+traits_body="${traits_body:2}"
+trailer="${trailer_name}: ${traits_body}"
+
+if [[ "$use_commit" == "true" ]]; then
+    git commit --trailer "$trailer"
+elif [[ "$commit_hash" == "HEAD" ]]; then
+    warn_if_replacing HEAD
+    git -c "trailer.${trailer_name}.ifExists=replace" commit --amend --trailer "$trailer"
+else
+    target=$(resolve_target "$commit_hash")
+    warn_if_replacing "$target"
+    old_message=$(git show -s --format=%B "$target")
+    new_message=$(git -c "trailer.${trailer_name}.ifExists=replace" interpret-trailers --trailer "$trailer" <<< "$old_message")
+    rewrite_commit_message "$target" "$new_message"
 fi
